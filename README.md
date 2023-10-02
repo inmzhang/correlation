@@ -1,2 +1,2 @@
 # correlation
-High order correlation analysis of error model
+High order correlation analysis of error models

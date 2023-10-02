@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 120
+exclude = ["__init__.py"]
+
+[project]
+name = "correlation"
+version = "0.1.0"
+authors = [{ "name" = "Yiming Zhang" }]
+requires-python = ">=3.7"
+description = "High order correlation analysis of error models."
+readme = "README.md"
+
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "stim"]
