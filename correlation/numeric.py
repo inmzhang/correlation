@@ -43,6 +43,8 @@ def cal_high_order_correlations(
     # calculate the expectations of each hyperedge
     _cal_expectations(detection_events, clusters)
     # solve the clusters
+    for cluster in clusters:
+        cluster.prepare_for_solve()
     if num_workers == 1:
         for cluster in clusters:
             cluster.solve(tol=tol)
@@ -204,20 +206,31 @@ class HyperedgeCluster:
                 prob *= (1 - probs[i])
         return prob
 
+    def prepare_for_solve(self):
+        self._intersection_cache = {}
+        self._superset_cache = {}
+        for hyperedge in self.members:
+            intersection = [h for h in self.members if h & hyperedge]
+            self._intersection_cache[hyperedge] = intersection
+            self._superset_cache[hyperedge] = [
+                select
+                for select in powerset(intersection)
+                if hyperedge.issubset(symmetric_difference(select))
+            ]
+
     def solve(self, tol: float):
+        # TODO: cache computation within `equations()`
         def equations(vrs):
             eqs = []
             for hyperedge in self.members:
                 expect = - self.expectations[hyperedge]
-                hyperedges_intersect_with_this = [h for h in self.members if h & hyperedge]
-                for selected in powerset(hyperedges_intersect_with_this):
-                    sym_diff = symmetric_difference(selected)
-                    if hyperedge.issubset(sym_diff):
-                        expect += self.prob_of_selected_hyperedges(
-                            selected,
-                            hyperedges_intersect_with_this,
-                            vrs
-                        )
+                intersection = self._intersection_cache[hyperedge]
+                for select in self._superset_cache[hyperedge]:
+                    expect += self.prob_of_selected_hyperedges(
+                        select,
+                        intersection,
+                        vrs
+                    )
                 eqs.append(expect)
             return np.array(eqs)
 
