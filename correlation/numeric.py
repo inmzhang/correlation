@@ -36,7 +36,7 @@ def cal_high_order_correlations(
         for i in range(num_dets)
         for j in range(i, num_dets)
     }
-    hyperedges = {} if hyperedges is None else set(hyperedges)
+    hyperedges = set() if hyperedges is None else set(hyperedges)
     hyperedges.update(edges)
     # divide the hyperedges into clusters
     clusters = _divide_into_clusters(hyperedges)
