@@ -3,11 +3,10 @@ import dataclasses
 import functools
 import itertools
 import multiprocessing
-from typing import Optional, Iterable, Dict, Set, List
+from typing import Optional, Iterable, Dict, Set, List, Sequence
 
 import numpy as np
 from scipy import optimize
-import sympy
 
 from correlation.utils import HyperEdge, cal_two_points_expects
 from correlation.result import CorrelationResult
@@ -144,8 +143,8 @@ class HyperedgeCluster:
     """A cluster of hyperedges to be solved."""
     root: HyperEdge
     members: List[HyperEdge]
-    symbols: List[sympy.Symbol]
-    equations: List[sympy.Expr]
+    prototype: "ClusterPrototype"
+    expectations: List[float] = dataclasses.field(default_factory=list)
     solved_probs: Dict[HyperEdge, float] = dataclasses.field(default_factory=dict)
 
     @property
@@ -168,7 +167,7 @@ class HyperedgeCluster:
                     ),
                 )
                 expectations[hyperedge] = prob
-            self.equations[i] -= prob
+            self.expectations.append(prob)
 
     def __contains__(self, item: HyperEdge):
         return item in self.members
@@ -180,10 +179,11 @@ class HyperedgeCluster:
     def solve(self, tol: float):
         """Solve the cluster."""
         def equations(vrs):
-            return np.array([float(eq.subs(zip(self.symbols, vrs))) for eq in self.equations])
+            eqs = self.prototype.calc_prob(vrs, self.expectations)
+            return np.asarray(eqs, dtype=np.float64)
         # solve numerically
         # though weight-2 cluster can be solved analytically
-        init_vrs = np.zeros(len(self.members))
+        init_vrs = np.zeros(len(self.members), dtype=np.float64)
         solution = optimize.root(equations, init_vrs, options={"xtol": tol})
         for edge, prob in zip(self.members, solution.x):
             self.solved_probs[edge] = prob
@@ -210,28 +210,23 @@ class ClusterPrototype:
                 for select in powerset(intersection)
                 if hyperedge.issubset(symmetric_difference(select))
             ])
-        # symbols for probability variables
-        symbol_names = [f'p{i}' for i in range(len(self.members))]
-        self.symbols = sympy.symbols(symbol_names)
-        # build the equation lhs
-        self._equation_lhs = self._build_equation_lhs()
 
-    def _build_equation_lhs(self):
+    def calc_prob(self, vrs: Sequence[float], expectations: List[float]) -> List[float]:
         eqs = []
         for i, hyperedge in enumerate(self.members):
-            eq = 0.0
             intersection = self.intersections[i]
             superset = self.supersets[i]
+            eq = -expectations[i]
             for select in superset:
-                prob = 1.0
+                p = 1.0
                 for j, h in enumerate(self.members):
                     if h not in intersection:
                         continue
                     if h in select:
-                        prob *= self.symbols[j]
+                        p *= vrs[j]
                     else:
-                        prob *= (1.0 - self.symbols[j])
-                eq += prob
+                        p *= (1.0 - vrs[j])
+                eq += p
             eqs.append(eq)
         return eqs
 
@@ -239,7 +234,7 @@ class ClusterPrototype:
         """Instantiate a cluster from the prototype."""
         mapping = sorted(root)
         members = [frozenset(mapping[i] for i in hyperedge) for hyperedge in self.members]
-        cluster = HyperedgeCluster(root, members, self.symbols, list(self._equation_lhs))
+        cluster = HyperedgeCluster(root, members, prototype=self)
         return cluster
         
 
