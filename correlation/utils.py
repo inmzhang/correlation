@@ -8,13 +8,8 @@ import stim
 
 def cal_two_points_expects(detection_events: np.ndarray) -> np.ndarray:
     """Calculate the two-point expectation matrix."""
-    # decide to use which dtype to save the results
-    # dtype specified in np.matmul influences the
-    # speed of calculation greatly
     num_shots = detection_events.shape[0]
-    dtype_use = 'uint16' if num_shots < 2 * (2**16 - 1) else 'uint32'
-    expect_ixj = np.matmul(detection_events.T, detection_events, dtype=dtype_use) / num_shots
-    return expect_ixj.astype(np.float64)
+    return np.matmul(detection_events.T, detection_events, dtype=np.float64) / num_shots
 
 
 HyperEdge = FrozenSet[int]
@@ -28,6 +23,7 @@ class TannerGraph:
     nodes (vnode) are the error sets that flip the detectors. The different
     errors flip the same detectors are considered as the same vnode.
     """
+
     def __init__(self, dem: stim.DetectorErrorModel) -> None:
         """Construct the tanner graph from a detector error model.
 
@@ -118,18 +114,19 @@ class TannerGraph:
         dets_track.append(dets_sep_track)
         frames_track.append(frames_sep_track)
         dets = frozenset(i for dets in dets_track for i in dets)
-        frame = frozenset(functools.reduce(
-            lambda x, y: x.symmetric_difference(y),
-            [set(frame) for frame in frames_track],
-            set()
-        ))
+        frame = frozenset(
+            functools.reduce(
+                lambda x, y: x.symmetric_difference(y),
+                [set(frame) for frame in frames_track],
+                set(),
+            )
+        )
         if dets not in self._hyperedges:
             self._hyperedges.append(dets)
             self._hyperedge_probs[dets] = prob
             self._hyperedge_frames[dets] = frame
             self._stim_decompose[dets] = [
-                frozenset(dets)
-                for dets, frame in zip(dets_track, frames_track)
+                frozenset(dets) for dets, frame in zip(dets_track, frames_track)
             ]
         else:
             prob_prev = self._hyperedge_probs[dets]
@@ -138,7 +135,7 @@ class TannerGraph:
 
 
 def correlation_from_detector_error_model(
-        dem: stim.DetectorErrorModel
+    dem: stim.DetectorErrorModel,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Extract the correlation matrix from the detector error model.
 

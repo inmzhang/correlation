@@ -3,7 +3,7 @@ import dataclasses
 import functools
 import itertools
 import multiprocessing
-from typing import Optional, Iterable, Dict, Set, List, cast
+from typing import Optional, Iterable, Dict, Set, List
 
 import numpy as np
 from scipy import optimize
@@ -13,10 +13,10 @@ from correlation.result import CorrelationResult
 
 
 def cal_high_order_correlations(
-        detection_events: np.ndarray,
-        hyperedges: Optional[Iterable[HyperEdge]] = None,
-        tol: float = 1e-4,
-        num_workers: int = 1,
+    detection_events: np.ndarray,
+    hyperedges: Optional[Iterable[HyperEdge]] = None,
+    tol: float = 1e-4,
+    num_workers: int = 1,
 ) -> CorrelationResult:
     """Calculate the high order correlation numerically.
 
@@ -31,11 +31,7 @@ def cal_high_order_correlations(
         The correlation result.
     """
     num_dets = detection_events.shape[1]
-    edges = {
-        frozenset({i, j})
-        for i in range(num_dets)
-        for j in range(i, num_dets)
-    }
+    edges = {frozenset({i, j}) for i in range(num_dets) for j in range(i, num_dets)}
     hyperedges = set() if hyperedges is None else set(hyperedges)
     hyperedges.update(edges)
     # divide the hyperedges into clusters
@@ -53,7 +49,11 @@ def cal_high_order_correlations(
         solved_clusters = []
         pool = multiprocessing.Pool(num_workers)
         for cluster in clusters:
-            pool.apply_async(_solve_cluster, (cluster, tol), callback=lambda c: solved_clusters.append(c))
+            pool.apply_async(
+                _solve_cluster,
+                (cluster, tol),
+                callback=lambda c: solved_clusters.append(c),
+            )
         pool.close()
         pool.join()
     # adjust the final probabilities
@@ -62,7 +62,7 @@ def cal_high_order_correlations(
     return CorrelationResult(corr_probs)
 
 
-def _divide_into_clusters(hyperedges: Iterable[HyperEdge]) -> List['HyperedgeCluster']:
+def _divide_into_clusters(hyperedges: Iterable[HyperEdge]) -> List["HyperedgeCluster"]:
     """Divide the hyperedges into clusters."""
     hyperedges_wait_cluster = list(hyperedges)
     hyperedges_wait_cluster.sort(key=len)
@@ -78,8 +78,7 @@ def _divide_into_clusters(hyperedges: Iterable[HyperEdge]) -> List['HyperedgeClu
 
 
 def _cal_expectations(
-        detection_events: np.ndarray,
-        clusters: List['HyperedgeCluster']
+    detection_events: np.ndarray, clusters: List["HyperedgeCluster"]
 ) -> None:
     """Calculate the expectations of each hyperedge."""
     # pre-calculate 2-point expectations using
@@ -97,8 +96,8 @@ def _cal_expectations(
 
 
 def _adjust_final_probs(
-        clusters: List['HyperedgeCluster'],
-        hyperedges: Iterable[HyperEdge],
+    clusters: List["HyperedgeCluster"],
+    hyperedges: Iterable[HyperEdge],
 ) -> Dict[HyperEdge, float]:
     """Adjust the final correlation probabilities."""
     # cluster roots need not be adjusted
@@ -109,9 +108,7 @@ def _adjust_final_probs(
         collected_probs = collections.defaultdict(list)
         # all clusters with weight greater than weight_to_adjust
         cluster_related = [
-            cluster
-            for cluster in clusters
-            if cluster.weight > weight_to_adjust
+            cluster for cluster in clusters if cluster.weight > weight_to_adjust
         ]
         # adjust the probability of hyperedges with weight
         # weight_to_adjust in each clusters by the probability
@@ -120,19 +117,16 @@ def _adjust_final_probs(
             for hyperedge in cluster.with_weight(weight_to_adjust):
                 prob_this = cluster.solved_probs[hyperedge]
                 supersets = [
-                    h for h in corr_probs
-                    if hyperedge.issubset(h) and h not in cluster
+                    h for h in corr_probs if hyperedge.issubset(h) and h not in cluster
                 ]
                 probs_for_adjust = [corr_probs[h] for h in supersets]
                 prob_adjusted = functools.reduce(
-                    lambda p, q: (p - q) / (1 - 2 * q),
-                    probs_for_adjust,
-                    prob_this
+                    lambda p, q: (p - q) / (1 - 2 * q), probs_for_adjust, prob_this
                 )
                 collected_probs[hyperedge].append(prob_adjusted)
         # average the probabilities of the same hyperedge in different clusters
         collected_probs_mean = {
-            hyperedge: np.mean(probs, dtype=float)
+            hyperedge: np.mean(probs, dtype=np.float64)
             for hyperedge, probs in collected_probs.items()
         }
         corr_probs.update(collected_probs_mean)
@@ -149,6 +143,7 @@ def _adjust_final_probs(
 @dataclasses.dataclass
 class HyperedgeCluster:
     """Dataclass used to store a cluster of hyperedges."""
+
     root: HyperEdge
     members: List[HyperEdge] = dataclasses.field(default_factory=list)
     expectations: Dict[HyperEdge, float] = dataclasses.field(default_factory=dict)
@@ -168,23 +163,21 @@ class HyperedgeCluster:
                 hyperedges_wait_cluster.remove(hyperedge)
 
     def cal_hyperedge_expectations(
-            self,
-            detection_events: np.ndarray,
-            global_expects: Dict[HyperEdge, float],
+        self,
+        detection_events: np.ndarray,
+        global_expects: Dict[HyperEdge, float],
     ):
         """Calculate the expectation values of each hyperedge
         from the detection events.
         """
-        num_shots = detection_events.shape[0]
-        dtype_use = 'uint16' if num_shots < 2 * (2 ** 16 - 1) else 'uint32'
         for hyperedge in self.members:
             prob = global_expects.get(hyperedge, None)
             if prob is None:  # pragma: no cover
                 prob = np.mean(
-                    np.prod(detection_events[:, list(hyperedge)], axis=1, dtype=dtype_use),
-                    dtype=float
+                    np.prod(
+                        detection_events[:, list(hyperedge)], axis=1, dtype=np.float64
+                    ),
                 )
-                global_expects[hyperedge] = cast(float, prob)
             self.expectations[hyperedge] = prob
 
     def __contains__(self, item: HyperEdge):
@@ -203,7 +196,7 @@ class HyperedgeCluster:
             if hyperedge in selected:
                 prob *= probs[i]
             else:
-                prob *= (1 - probs[i])
+                prob *= 1 - probs[i]
         return prob
 
     def prepare_for_solve(self):
@@ -219,17 +212,14 @@ class HyperedgeCluster:
             ]
 
     def solve(self, tol: float):
-        # TODO: cache computation within `equations()`
         def equations(vrs):
             eqs = []
             for hyperedge in self.members:
-                expect = - self.expectations[hyperedge]
+                expect = -self.expectations[hyperedge]
                 intersection = self._intersection_cache[hyperedge]
                 for select in self._superset_cache[hyperedge]:
                     expect += self.prob_of_selected_hyperedges(
-                        select,
-                        intersection,
-                        vrs
+                        select, intersection, vrs
                     )
                 eqs.append(expect)
             return np.array(eqs)
@@ -237,7 +227,7 @@ class HyperedgeCluster:
         # solve numerically
         # though weight-2 cluster can be solved analytically
         init_vrs = np.zeros(len(self.members))
-        solution = optimize.root(equations, init_vrs, options={'xtol': tol})
+        solution = optimize.root(equations, init_vrs, options={"xtol": tol})
         for edge, prob in zip(self.members, solution.x):
             self.solved_probs[edge] = prob
 
