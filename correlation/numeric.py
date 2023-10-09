@@ -7,6 +7,7 @@ from typing import Optional, Iterable, Dict, Set, List
 
 import numpy as np
 from scipy import optimize
+import sympy
 
 from correlation.utils import HyperEdge, cal_two_points_expects
 from correlation.result import CorrelationResult
@@ -65,10 +66,10 @@ def _divide_into_clusters(hyperedges: Iterable[HyperEdge]) -> List["HyperedgeClu
     hyperedges_wait_cluster = list(hyperedges)
     hyperedges_wait_cluster.sort(key=len)
     clusters = []
+    prototypes = {}
     while hyperedges_wait_cluster:
-        hyperedge = hyperedges_wait_cluster.pop()
-        cluster = HyperedgeCluster(hyperedge)
-        cluster.register(hyperedges_wait_cluster)
+        root = hyperedges_wait_cluster.pop()
+        cluster = register_cluster(root, prototypes, hyperedges_wait_cluster)
         clusters.append(cluster)
     # sort the clusters by weights
     clusters.sort(key=lambda c: c.weight, reverse=True)
@@ -90,7 +91,7 @@ def _cal_expectations(
         for j in range(i):
             expectations[frozenset({i, j})] = expect_ixj[i, j].item()
     for cluster in clusters:
-        cluster.cal_hyperedge_expectations(detection_events, expectations)
+        cluster.register_expectation(detection_events, expectations)
 
 
 def _adjust_final_probs(
@@ -140,11 +141,11 @@ def _adjust_final_probs(
 
 @dataclasses.dataclass
 class HyperedgeCluster:
-    """Dataclass used to store a cluster of hyperedges."""
-
+    """A cluster of hyperedges to be solved."""
     root: HyperEdge
-    members: List[HyperEdge] = dataclasses.field(default_factory=list)
-    expectations: Dict[HyperEdge, float] = dataclasses.field(default_factory=dict)
+    members: List[HyperEdge]
+    symbols: List[sympy.Symbol]
+    equations: List[sympy.Expr]
     solved_probs: Dict[HyperEdge, float] = dataclasses.field(default_factory=dict)
 
     @property
@@ -152,31 +153,22 @@ class HyperedgeCluster:
         """Return the weight of the cluster."""
         return len(self.root)
 
-    def register(self, hyperedges_wait_cluster: List[HyperEdge]):
-        """Register the members of the cluster."""
-        self.members = list(frozenset(hyperedge) for hyperedge in powerset(self.root))
-        self.members.sort(key=len, reverse=True)
-        for hyperedge in self.members:
-            if hyperedge in hyperedges_wait_cluster:
-                hyperedges_wait_cluster.remove(hyperedge)
-
-    def cal_hyperedge_expectations(
+    def register_expectation(
         self,
         detection_events: np.ndarray,
-        global_expects: Dict[HyperEdge, float],
-    ):
-        """Calculate the expectation values of each hyperedge
-        from the detection events.
-        """
-        for hyperedge in self.members:
-            prob = global_expects.get(hyperedge, None)
+        expectations: Dict[HyperEdge, float],
+    ) -> None:
+        """Calculate the expectation values of each hyperedge from the detection events. """
+        for i, hyperedge in enumerate(self.members):
+            prob = expectations.get(hyperedge)
             if prob is None:  # pragma: no cover
                 prob = np.mean(
                     np.prod(
                         detection_events[:, list(hyperedge)], axis=1, dtype=np.float64
                     ),
                 )
-            self.expectations[hyperedge] = prob
+                expectations[hyperedge] = prob
+            self.equations[i] -= prob
 
     def __contains__(self, item: HyperEdge):
         return item in self.members
@@ -185,45 +177,10 @@ class HyperedgeCluster:
         """Return the hyperedges with the given weight in the cluster."""
         return [hyperedge for hyperedge in self.members if len(hyperedge) == weight]
 
-    def prob_of_selected_hyperedges(self, selected, all_intersect_with_this, probs):
-        """Probability of the selected hyperedges flip simultaneously."""
-        prob = 1.0
-        for i, hyperedge in enumerate(self.members):
-            if hyperedge not in all_intersect_with_this:
-                continue
-            if hyperedge in selected:
-                prob *= probs[i]
-            else:
-                prob *= 1 - probs[i]
-        return prob
-
-    def prepare_for_solve(self):
-        self._intersection_cache = {}
-        self._superset_cache = {}
-        for hyperedge in self.members:
-            intersection = [h for h in self.members if h & hyperedge]
-            self._intersection_cache[hyperedge] = intersection
-            self._superset_cache[hyperedge] = [
-                select
-                for select in powerset(intersection)
-                if hyperedge.issubset(symmetric_difference(select))
-            ]
-
     def solve(self, tol: float):
-        self.prepare_for_solve()
-
+        """Solve the cluster."""
         def equations(vrs):
-            eqs = []
-            for hyperedge in self.members:
-                expect = -self.expectations[hyperedge]
-                intersection = self._intersection_cache[hyperedge]
-                for select in self._superset_cache[hyperedge]:
-                    expect += self.prob_of_selected_hyperedges(
-                        select, intersection, vrs
-                    )
-                eqs.append(expect)
-            return np.array(eqs)
-
+            return np.array([float(eq.subs(zip(self.symbols, vrs))) for eq in self.equations])
         # solve numerically
         # though weight-2 cluster can be solved analytically
         init_vrs = np.zeros(len(self.members))
@@ -235,6 +192,72 @@ class HyperedgeCluster:
 def _solve_cluster(cluster: HyperedgeCluster, tol: float):
     """Helper function to make it possible to use multiprocessing."""
     cluster.solve(tol=tol)
+    return cluster
+
+
+class ClusterPrototype:
+    """Helper class for cluster computation cache."""
+    def __init__(self, size: int) -> None:
+        root = frozenset(range(size))
+        self.members = list(frozenset(h) for h in powerset(root))
+        self.intersections = []
+        self.supersets = []
+        for hyperedge in self.members:
+            intersection = [h for h in self.members if h & hyperedge]
+            self.intersections.append(intersection)
+            self.supersets.append([
+                select
+                for select in powerset(intersection)
+                if hyperedge.issubset(symmetric_difference(select))
+            ])
+        # symbols for probability variables
+        symbol_names = [f'p{i}' for i in range(len(self.members))]
+        self.symbols = sympy.symbols(symbol_names)
+        # build the equation lhs
+        self._equation_lhs = self._build_equation_lhs()
+
+    def _build_equation_lhs(self):
+        eqs = []
+        for i, hyperedge in enumerate(self.members):
+            eq = 0.0
+            intersection = self.intersections[i]
+            superset = self.supersets[i]
+            for select in superset:
+                prob = 1.0
+                for j, h in enumerate(self.members):
+                    if h not in intersection:
+                        continue
+                    if h in select:
+                        prob *= self.symbols[j]
+                    else:
+                        prob *= (1.0 - self.symbols[j])
+                eq += prob
+            eqs.append(eq)
+        return eqs
+
+    def instantiate(self, root: HyperEdge) -> HyperedgeCluster:
+        """Instantiate a cluster from the prototype."""
+        mapping = sorted(root)
+        members = [frozenset(mapping[i] for i in hyperedge) for hyperedge in self.members]
+        cluster = HyperedgeCluster(root, members, self.symbols, list(self._equation_lhs))
+        return cluster
+        
+
+def register_cluster(
+    root: HyperEdge,
+    prototypes: Dict[int, ClusterPrototype],
+    hyperedges_wait_cluster: List[HyperEdge],
+) -> HyperedgeCluster:
+    """Register a new cluster."""
+    size = len(root)
+    proto = prototypes.get(size)
+    if proto is None:
+        proto = ClusterPrototype(size)
+        prototypes[size] = proto
+    cluster = proto.instantiate(root)
+    for hyperedge in cluster.members:
+        if hyperedge in hyperedges_wait_cluster:
+            hyperedges_wait_cluster.remove(hyperedge)
     return cluster
 
 
