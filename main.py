@@ -11,7 +11,7 @@ def main():
     dets = stim.read_shot_data_file(
         path=save_dir / "detectors.b8",
         format='b8',
-        num_detectors=16,
+        num_detectors=88,
     )
     s = time.perf_counter()
     res = correlation.cal_2nd_order_correlations(dets)

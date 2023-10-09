@@ -39,8 +39,6 @@ def cal_high_order_correlations(
     # calculate the expectations of each hyperedge
     _cal_expectations(detection_events, clusters)
     # solve the clusters
-    for cluster in clusters:
-        cluster.prepare_for_solve()
     if num_workers == 1:
         for cluster in clusters:
             cluster.solve(tol=tol)
@@ -212,6 +210,8 @@ class HyperedgeCluster:
             ]
 
     def solve(self, tol: float):
+        self.prepare_for_solve()
+
         def equations(vrs):
             eqs = []
             for hyperedge in self.members:
