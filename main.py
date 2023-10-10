@@ -7,11 +7,13 @@ import correlation
 
 
 def main():
-    save_dir = pathlib.Path("/home/inm/WorkDir/RustProject/correlation-rs/test_data/surface_code")
+    save_dir = pathlib.Path(
+        "/home/inm/WorkDir/RustProject/correlation-rs/test_data/surface_code"
+    )
     dets = stim.read_shot_data_file(
         path=save_dir / "detectors.b8",
-        format='b8',
-        num_detectors=88,
+        format="b8",
+        num_detectors=16,
     )
     # s = time.perf_counter()
     # res = correlation.cal_2nd_order_correlations(dets)
@@ -33,13 +35,17 @@ def main():
     hyperedges = [frozenset(h) for h in save_obj["hyperedges"]]
     analytic_probs = save_obj["probability"]
     s = time.perf_counter()
-    res = correlation.cal_high_order_correlations(dets, hyperedges, tol=1e-6, num_workers=16)
+    res = correlation.cal_high_order_correlations(
+        dets, hyperedges, tol=1e-6, num_workers=16
+    )
     e = time.perf_counter()
     print(f"Hyperedge solve time: {(e - s)}s")
-    show_hyperedges = list((h, p) for h, p in zip(hyperedges, analytic_probs) if len(h) > 2)
+    show_hyperedges = list(
+        (h, p) for h, p in zip(hyperedges, analytic_probs) if len(h) > 2
+    )
     print(f"Solved hyperedge probabilities: {[res.get(i[0]) for i in show_hyperedges]}")
     print(f"Analytical hyperedge probabilities: {[i[1] for i in show_hyperedges]}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
