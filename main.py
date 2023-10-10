@@ -8,7 +8,7 @@ import correlation
 
 def main():
     save_dir = pathlib.Path(
-        "/home/inm/WorkDir/RustProject/correlation-rs/test_data/surface_code"
+        "/Users/inm/Programming/RustProject/correlation-rs/test_data/surface_code"
     )
     dets = stim.read_shot_data_file(
         path=save_dir / "detectors.b8",
