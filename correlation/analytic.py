@@ -1,16 +1,17 @@
 """Calculate correlation up to 2nd order analytically."""
 import functools
-from typing import Optional
+from typing import Iterable, Optional
 
 import numpy as np
 
 from correlation.result import CorrelationResult, AnalyticalResult
-from correlation.utils import cal_two_points_expects
+from correlation.utils import HyperEdge, cal_two_points_expects
 
 
 def cal_2nd_order_correlations(
         detection_events: np.ndarray,
         detector_mask: Optional[np.ndarray] = None,
+        hyperedges: Iterable[HyperEdge] = ()
 ) -> CorrelationResult:
     """Calculate the 2nd order correlation analytically.
 
@@ -18,18 +19,29 @@ def cal_2nd_order_correlations(
         detection_events: The detection events.
         detector_mask: A boolean mask of the shape (num_dets_per_shot, ). If True, the
             corresponding detection events will be excluded.
+        hyperedges: The hyperedges to be calculated. If None, all hyperedges up to 2nd order
+            will be calculated.
 
     Returns:
         The correlation result.
     """
     if detector_mask is not None:
         detection_events = detection_events[:, ~detector_mask]
-    data = _analytical_core(detection_events)
+    num_dets = detection_events.shape[1]
+    if any(i >= num_dets for h in hyperedges for i in h):
+        raise ValueError("Hyperedge index out of range.")
+    hyperedges = list(hyperedges) or [
+        frozenset([i]) for i in range(num_dets)
+    ] + [
+        frozenset([i, j]) for i in range(num_dets) for j in range(i)
+    ]
+        
+    data = _analytical_core(detection_events, hyperedges)
     return CorrelationResult(data)
 
 
-def _analytical_core(detection_events: np.ndarray) -> AnalyticalResult:
-    num_shots, num_dets = detection_events.shape
+def _analytical_core(detection_events: np.ndarray, hyperedges: Iterable[HyperEdge]) -> AnalyticalResult:
+    _, num_dets = detection_events.shape
     correlation_edges = np.zeros((num_dets, num_dets), dtype=float)
     correlation_bdy = np.zeros((num_dets,), dtype=float)
     expect_ixj = cal_two_points_expects(detection_events)
@@ -65,11 +77,20 @@ def _analytical_core(detection_events: np.ndarray) -> AnalyticalResult:
 
     correlation_edges[i_indices, j_indices] = pij_values
     correlation_edges += correlation_edges.T
-
+    
+    # use the edges in the hyperedges to adjust the boundary
     for i in range(num_dets):
         xi = expect_ixj[i, i]
-        all_edges_of_i = np.delete(correlation_edges[i, :], i)
-        pi_sum = functools.reduce(lambda p, q: p + q - 2 * p * q, all_edges_of_i)
+        pi_sum = 0
+        for j in range(num_dets):
+            if j == i:
+                continue
+            if frozenset([i, j]) in hyperedges:
+                pj = correlation_edges[i, j]
+                pi_sum = pi_sum + pj - 2 * pi_sum * pj
         pi_bdy = (xi - pi_sum) / (1 - 2 * pi_sum)
+        # all_edges_of_i = np.delete(correlation_edges[i, :], i)
+        # pi_sum = functools.reduce(lambda p, q: p + q - 2 * p * q, all_edges_of_i)
+        # pi_bdy = (xi - pi_sum) / (1 - 2 * pi_sum)
         correlation_bdy[i] = pi_bdy
     return correlation_bdy, correlation_edges

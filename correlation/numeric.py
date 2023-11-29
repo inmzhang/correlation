@@ -32,8 +32,7 @@ def cal_high_order_correlations(
     """
     num_dets = detection_events.shape[1]
     edges = {frozenset({i, j}) for i in range(num_dets) for j in range(i, num_dets)}
-    hyperedges = set() if hyperedges is None else set(hyperedges)
-    hyperedges.update(edges)
+    hyperedges = set(edges) if hyperedges is None else set(hyperedges)
     # divide the hyperedges into clusters
     clusters = _divide_into_clusters(hyperedges)
     # calculate the expectations of each hyperedge
@@ -118,9 +117,8 @@ def _adjust_final_probs(
                     h for h in corr_probs if hyperedge.issubset(h) and h not in cluster
                 ]
                 probs_for_adjust = [corr_probs[h] for h in supersets]
-                prob_adjusted = functools.reduce(
-                    lambda p, q: (p - q) / (1 - 2 * q), probs_for_adjust, prob_this
-                )
+                p_sum = functools.reduce(lambda p, q: p + q - 2 * p * q, probs_for_adjust, 0.0)
+                prob_adjusted = (prob_this - p_sum) / (1 - 2*p_sum)
                 collected_probs[hyperedge].append(prob_adjusted)
         # average the probabilities of the same hyperedge in different clusters
         collected_probs_mean = {

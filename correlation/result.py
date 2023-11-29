@@ -34,6 +34,7 @@ class CorrelationResult:
             The correlation of the given detectors. If the correlation is not
             included in the result, return None.
         """
+        detectors = list(detectors)
         if isinstance(self.data, dict):
             hyperedge = frozenset(detectors)
             val = self.data.get(hyperedge)
