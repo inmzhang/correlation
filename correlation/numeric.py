@@ -114,7 +114,7 @@ def _adjust_final_probs(
             for hyperedge in cluster.with_weight(weight_to_adjust):
                 prob_this = cluster.solved_probs[hyperedge]
                 supersets = [
-                    h for h in corr_probs if hyperedge.issubset(h) and h not in cluster
+                    h for h in corr_probs if hyperedge == h & cluster.root and h not in cluster
                 ]
                 probs_for_adjust = [corr_probs[h] for h in supersets]
                 p_sum = functools.reduce(lambda p, q: p + q - 2 * p * q, probs_for_adjust, 0.0)
@@ -185,7 +185,7 @@ class HyperedgeCluster:
         solution = optimize.root(equations, init_vrs, options={"xtol": tol})
         for edge, prob in zip(self.members, solution.x):
             self.solved_probs[edge] = prob
-
+            
 
 def _solve_cluster(cluster: HyperedgeCluster, tol: float):
     """Helper function to make it possible to use multiprocessing."""
@@ -211,7 +211,7 @@ class ClusterPrototype:
 
     def calc_prob(self, vrs: Sequence[float], expectations: List[float]) -> List[float]:
         eqs = []
-        for i, hyperedge in enumerate(self.members):
+        for i, _ in enumerate(self.members):
             intersection = self.intersections[i]
             superset = self.supersets[i]
             eq = -expectations[i]
@@ -220,10 +220,11 @@ class ClusterPrototype:
                 for j, h in enumerate(self.members):
                     if h not in intersection:
                         continue
+                    pj = vrs[j]
                     if h in select:
-                        p *= vrs[j]
+                        p *= pj
                     else:
-                        p *= (1.0 - vrs[j])
+                        p *= (1.0 - pj)
                 eq += p
             eqs.append(eq)
         return eqs
@@ -270,3 +271,13 @@ def symmetric_difference(iterable_set: Iterable[Set[int]]) -> Set[int]:
         return a.symmetric_difference(b)
 
     return functools.reduce(sym_diff, iterable_set)
+
+
+def safe_logistic(x):
+    if x < -100:
+        return 0.0
+    elif x > 100:
+        return 1.0
+    else:
+        return 1 / (1 + np.exp(-x))
+

@@ -11,20 +11,20 @@ def main():
     google_derived_dem = stim.DetectorErrorModel.from_file(google_derived_dem_filepath)
 
     tanner_graph = cpy.TannerGraph(google_derived_dem)
-    # sampler = google_derived_dem.compile_sampler()
-    # detectors, _, _ = sampler.sample(5000000)
+    sampler = google_derived_dem.compile_sampler()
+    detectors, _, _ = sampler.sample(500_0000)
     hyperedges = tanner_graph.hyperedges
-    detectors = stim.read_shot_data_file(path=data_dir/"detection_events.b8", format="b8", num_detectors=24)
-    detectors = detectors[::2]
+    # detectors = stim.read_shot_data_file(path=data_dir/"detection_events.b8", format="b8", num_detectors=24)
+    # detectors = detectors[::2]
 
     # correlation_results = cpy.cal_2nd_order_correlations(detectors, hyperedges=tanner_graph.hyperedges)
-    correlation_results = cpy.cal_high_order_correlations(detectors, tanner_graph.hyperedges, num_workers=8)
+    correlation_results = cpy.cal_high_order_correlations(detectors, hyperedges, num_workers=8)
     
     # aim = frozenset([17, 5, 7])
     for hyperedge in hyperedges:
-        # if len(hyperedge) == 1:
-        if 8 in hyperedge:
-        # if frozenset([8, 2]).issubset(hyperedge):
+        if len(hyperedge) == 1:
+        # if 8 in hyperedge:
+        # if frozenset([8, 9, 7]).issubset(hyperedge):
             # if any(h != hyperedge and hyperedge.issubset(h) for h in hyperedges):
             #     continue
             print(f"Hyperedge: {hyperedge}, ideal: {tanner_graph.hyperedge_probs.get(hyperedge)}, result: {correlation_results.get(hyperedge)}")
