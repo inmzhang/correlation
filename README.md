@@ -4,7 +4,7 @@ High order correlation analysis of detector error models
 ## Installation
 
 ```shell
-pip install correlation_analysis
+pip install correlation-analysis
 ```
 
 ## Usage
