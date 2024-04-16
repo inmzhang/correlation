@@ -7,17 +7,14 @@ line-length = 120
 exclude = ["__init__.py"]
 
 [project]
-name = "correlation"
+name = "correlation-analysis"
 version = "0.1.0"
 authors = [{ "name" = "Yiming Zhang" }]
 requires-python = ">=3.7"
 description = "High order correlation analysis of error models."
 readme = "README.md"
 
-dependencies = [
-    "numpy",
-    "scipy",
-]
+dependencies = ["numpy", "scipy"]
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "stim"]
