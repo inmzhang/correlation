@@ -14,7 +14,7 @@ requires-python = ">=3.7"
 description = "High order correlation analysis of error models."
 readme = "README.md"
 
-dependencies = ["numpy", "scipy"]
+dependencies = ["numpy", "scipy", "stim"]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "stim"]
+dev = ["pytest", "ruff"]
