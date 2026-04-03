@@ -1,5 +1,4 @@
 """Calculate correlation up to 2nd order analytically."""
-import functools
 from typing import Iterable, Optional
 
 import numpy as np

@@ -2,6 +2,7 @@ import stim
 import numpy as np
 
 import correlation
+from correlation.numeric import ClusterPrototype
 
 
 def test_high_order_equals_naive_in_rep_code():
@@ -35,23 +36,39 @@ def test_high_order_equals_naive_in_rep_code():
     np.testing.assert_allclose(edges, edges_ideal, atol=1e-2)
 
 
-# def test_cal_high_order_surface_code():
-#     circuit = stim.Circuit.generated(
-#         code_task='surface_code:rotated_memory_z',
-#         distance=3,
-#         rounds=2,
-#         after_clifford_depolarization=0.01,
-#         after_reset_flip_probability=0.01,
-#         before_measure_flip_probability=0.01,
-#         before_round_data_depolarization=0.01,
-#     )
-#     dets = circuit.compile_detector_sampler().sample(shots=500000)
-#     dem = circuit.detector_error_model(decompose_errors=True)
-#     graph = correlation.TannerGraph(dem)
-#     result = correlation.cal_high_order_correlations(dets, graph.hyperedges, num_workers=8)
-#     prob_from_dem = []
-#     prob_from_correlation = []
-#     for hyperedge, prob in graph.hyperedge_probs.items():
-#         prob_from_dem.append(prob)
-#         prob_from_correlation.append(result.get(hyperedge))
-#     np.testing.assert_allclose(prob_from_dem, prob_from_correlation, atol=1e-2)
+def test_cluster_direct_solver_matches_numeric_root():
+    prototype = ClusterPrototype(4)
+    rng = np.random.default_rng(0)
+    probs = rng.uniform(0.0, 0.05, size=len(prototype.members))
+    expectations = prototype.calc_prob(probs, [0.0] * len(prototype.members))
+
+    direct = prototype.solve_probs(expectations, tol=1e-10)
+    numeric = prototype._solve_probs_numerically(
+        np.asarray(expectations, dtype=np.float64),
+        tol=1e-10,
+    )
+
+    np.testing.assert_allclose(direct, probs, atol=1e-10)
+    np.testing.assert_allclose(direct, numeric, atol=1e-8)
+
+
+def test_high_order_surface_code():
+    circuit = stim.Circuit.generated(
+        code_task='surface_code:rotated_memory_z',
+        distance=3,
+        rounds=2,
+        after_clifford_depolarization=0.01,
+        after_reset_flip_probability=0.01,
+        before_measure_flip_probability=0.01,
+        before_round_data_depolarization=0.01,
+    )
+    dets = circuit.compile_detector_sampler().sample(shots=100000)
+    dem = circuit.detector_error_model(decompose_errors=True)
+    graph = correlation.TannerGraph(dem)
+    result = correlation.cal_high_order_correlations(dets, graph.hyperedges)
+    prob_from_dem = []
+    prob_from_correlation = []
+    for hyperedge, prob in graph.hyperedge_probs.items():
+        prob_from_dem.append(prob)
+        prob_from_correlation.append(result.get(hyperedge))
+    np.testing.assert_allclose(prob_from_dem, prob_from_correlation, atol=1e-2)

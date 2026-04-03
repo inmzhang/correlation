@@ -18,13 +18,13 @@ def cal_high_order_correlations(
     tol: float = 1e-4,
     num_workers: int = 1,
 ) -> CorrelationResult:
-    """Calculate the high order correlation numerically.
+    """Calculate the high order correlation cluster by cluster.
 
     Args:
         detection_events: The detection events.
         hyperedges: The hyperedges to take into account, excluding the 1st and 2nd
             order edges.
-        tol: Tolerance for the `optimize.root()` subroutine.
+        tol: Tolerance for the legacy `optimize.root()` fallback.
         num_workers: The number of cores to run in parallel.
 
     Returns:
@@ -43,16 +43,23 @@ def cal_high_order_correlations(
             cluster.solve(tol=tol)
         solved_clusters = clusters
     else:
-        solved_clusters = []
-        pool = multiprocessing.Pool(num_workers)
+        numeric_clusters = []
         for cluster in clusters:
-            pool.apply_async(
-                _solve_cluster,
-                (cluster, tol),
-                callback=lambda c: solved_clusters.append(c),
-            )
-        pool.close()
-        pool.join()
+            if not cluster.try_solve_direct():
+                numeric_clusters.append(cluster)
+
+        solved_clusters = clusters
+        if numeric_clusters:
+            with multiprocessing.Pool(min(num_workers, len(numeric_clusters))) as pool:
+                solved_numeric = pool.starmap(
+                    _solve_cluster,
+                    [(cluster, tol) for cluster in numeric_clusters],
+                )
+            solved_by_root = {cluster.root: cluster for cluster in solved_numeric}
+            solved_clusters = [
+                solved_by_root.get(cluster.root, cluster)
+                for cluster in clusters
+            ]
     # adjust the final probabilities
     solved_clusters.sort(key=lambda c: c.weight, reverse=True)
     corr_probs = _adjust_final_probs(solved_clusters, hyperedges)
@@ -61,13 +68,15 @@ def cal_high_order_correlations(
 
 def _divide_into_clusters(hyperedges: Iterable[HyperEdge]) -> List["HyperedgeCluster"]:
     """Divide the hyperedges into clusters."""
-    hyperedges_wait_cluster = list(hyperedges)
-    hyperedges_wait_cluster.sort(key=len)
+    remaining_hyperedges = set(hyperedges)
+    hyperedges_sorted = sorted(remaining_hyperedges, key=len, reverse=True)
     clusters = []
     prototypes = {}
-    while hyperedges_wait_cluster:
-        root = hyperedges_wait_cluster.pop()
-        cluster = register_cluster(root, prototypes, hyperedges_wait_cluster)
+    for root in hyperedges_sorted:
+        if root not in remaining_hyperedges:
+            continue
+        cluster = register_cluster(root, prototypes)
+        remaining_hyperedges.difference_update(cluster.members)
         clusters.append(cluster)
     # sort the clusters by weights
     clusters.sort(key=lambda c: c.weight, reverse=True)
@@ -176,15 +185,20 @@ class HyperedgeCluster:
 
     def solve(self, tol: float):
         """Solve the cluster."""
-        def equations(vrs):
-            eqs = self.prototype.calc_prob(vrs, self.expectations)
-            return np.asarray(eqs, dtype=np.float64)
-        # solve numerically
-        # though weight-2 cluster can be solved analytically
-        init_vrs = np.zeros(len(self.members), dtype=np.float64)
-        solution = optimize.root(equations, init_vrs, options={"xtol": tol})
-        for edge, prob in zip(self.members, solution.x):
-            self.solved_probs[edge] = prob
+        probs = self.prototype.solve_probs(self.expectations, tol)
+        self.solved_probs = {
+            edge: prob for edge, prob in zip(self.members, probs)
+        }
+
+    def try_solve_direct(self) -> bool:
+        """Try the closed-form solver and return whether it succeeded."""
+        probs = self.prototype.try_solve_probs_direct(self.expectations)
+        if probs is None:
+            return False
+        self.solved_probs = {
+            edge: prob for edge, prob in zip(self.members, probs)
+        }
+        return True
             
 
 def _solve_cluster(cluster: HyperedgeCluster, tol: float):
@@ -198,18 +212,21 @@ class ClusterPrototype:
     def __init__(self, size: int) -> None:
         root = frozenset(range(size))
         self.members = list(frozenset(h) for h in powerset(root))
-        self.intersections = []
-        self.supersets = []
-        for hyperedge in self.members:
-            intersection = [h for h in self.members if h & hyperedge]
-            self.intersections.append(intersection)
-            self.supersets.append([
-                select
-                for select in powerset(intersection)
-                if hyperedge.issubset(symmetric_difference(select))
-            ])
+        num_members = len(self.members)
+        self.intersections = None
+        self.supersets = None
+        self.moment_transform = np.zeros((num_members, num_members), dtype=np.float64)
+        self.parity_solve_matrix = np.zeros((num_members, num_members), dtype=np.float64)
+        for i, target in enumerate(self.members):
+            for j, source in enumerate(self.members):
+                if source.issubset(target):
+                    self.moment_transform[i, j] = (-2.0) ** len(source)
+                if len(target & source) % 2 == 1:
+                    self.parity_solve_matrix[i, j] = 1.0
+        self.parity_solve_matrix = np.linalg.inv(self.parity_solve_matrix)
 
     def calc_prob(self, vrs: Sequence[float], expectations: List[float]) -> List[float]:
+        self._init_numeric_solver_cache()
         eqs = []
         for i, _ in enumerate(self.members):
             intersection = self.intersections[i]
@@ -229,6 +246,61 @@ class ClusterPrototype:
             eqs.append(eq)
         return eqs
 
+    def solve_probs(self, expectations: Sequence[float], tol: float) -> np.ndarray:
+        """Solve the cluster probabilities from the measured expectations."""
+        direct_probs = self.try_solve_probs_direct(expectations)
+        if direct_probs is not None:
+            return direct_probs
+
+        expectations_array = np.asarray(expectations, dtype=np.float64)
+        return self._solve_probs_numerically(expectations_array, tol)
+
+    def try_solve_probs_direct(
+        self,
+        expectations: Sequence[float],
+    ) -> Optional[np.ndarray]:
+        """Try the closed-form parity-moment solve."""
+        expectations_array = np.asarray(expectations, dtype=np.float64)
+        moments = 1.0 + self.moment_transform @ expectations_array
+        if np.any(moments <= 0.0) or not np.all(np.isfinite(moments)):
+            return None
+
+        log_q = self.parity_solve_matrix @ np.log(moments)
+        probs = 0.5 * (1.0 - np.exp(log_q))
+        if not np.all(np.isfinite(probs)):
+            return None
+        return probs
+
+    def _init_numeric_solver_cache(self) -> None:
+        """Build the combinatorial structures used by the legacy root solver."""
+        if self.intersections is not None and self.supersets is not None:
+            return
+
+        self.intersections = []
+        self.supersets = []
+        for hyperedge in self.members:
+            intersection = [h for h in self.members if h & hyperedge]
+            self.intersections.append(intersection)
+            self.supersets.append([
+                select
+                for select in powerset(intersection)
+                if hyperedge.issubset(symmetric_difference(select))
+            ])
+
+    def _solve_probs_numerically(
+        self,
+        expectations: np.ndarray,
+        tol: float,
+    ) -> np.ndarray:
+        """Legacy root solve kept as a fallback for ill-conditioned samples."""
+        def equations(vrs):
+            eqs = self.calc_prob(vrs, expectations)
+            return np.asarray(eqs, dtype=np.float64)
+
+        init_vrs = np.zeros(len(self.members), dtype=np.float64)
+        solution = optimize.root(equations, init_vrs, options={"xtol": tol})
+        return solution.x
+
     def instantiate(self, root: HyperEdge) -> HyperedgeCluster:
         """Instantiate a cluster from the prototype."""
         mapping = sorted(root)
@@ -240,7 +312,6 @@ class ClusterPrototype:
 def register_cluster(
     root: HyperEdge,
     prototypes: Dict[int, ClusterPrototype],
-    hyperedges_wait_cluster: List[HyperEdge],
 ) -> HyperedgeCluster:
     """Register a new cluster."""
     size = len(root)
@@ -249,9 +320,6 @@ def register_cluster(
         proto = ClusterPrototype(size)
         prototypes[size] = proto
     cluster = proto.instantiate(root)
-    for hyperedge in cluster.members:
-        if hyperedge in hyperedges_wait_cluster:
-            hyperedges_wait_cluster.remove(hyperedge)
     return cluster
 
 
@@ -280,4 +348,3 @@ def safe_logistic(x):
         return 1.0
     else:
         return 1 / (1 + np.exp(-x))
-
