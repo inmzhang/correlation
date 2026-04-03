@@ -8,11 +8,23 @@ High-order correlation analysis for detector error models produced by `stim`.
 - `correlation.cal_high_order_correlations(...)` computes higher-order correlations cluster by cluster using a closed-form parity-moment inversion, with a numerical fallback for ill-conditioned sampled moments.
 - `correlation.TannerGraph(...)` extracts hyperedges and probabilities from a detector error model.
 
+## Recommended Workflow
+
+This repository includes a checked-in `uv.lock`. Prefer `uv` for reproducible local development and example runs:
+
+```shell
+uv sync --dev
+uv run python examples/surface_code.py
+uv run python examples/repetition_code.py
+```
+
 ## Installation
 
 ```shell
 pip install correlation-analysis
 ```
+
+If you only want the published package, `pip` is sufficient. If you are working from this repository, prefer `uv sync --dev`.
 
 ## Quick Start
 
@@ -68,6 +80,7 @@ boundary, edges = result.data
 ## Development
 
 ```shell
+uv sync --dev
 uv run --with pytest python -m pytest -q
 uv run --with ruff python -m ruff check src examples
 ```
