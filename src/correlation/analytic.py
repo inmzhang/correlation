@@ -45,18 +45,6 @@ def _analytical_core(detection_events: np.ndarray, hyperedges: Iterable[HyperEdg
     correlation_bdy = np.zeros((num_dets,), dtype=float)
     expect_ixj = cal_two_points_expects(detection_events)
 
-    # for i in range(num_dets):
-    #     xi = expect_ixj[i, i]
-    #     for j in range(i):
-    #         xj = expect_ixj[j, j]
-    #         xij = expect_ixj[i, j]
-    #         try:
-    #             pij = 0.5 - 0.5 * np.sqrt(1 - 4 * (xij - xi * xj) / (1 - 2 * xi - 2 * xj + 4 * xij))
-    #         except ValueError:  # pragma: no cover
-    #             pij = 0
-    #         correlation_edges[i, j] = pij
-    # correlation_edges = correlation_edges + correlation_edges.T
-
     i_indices, j_indices = np.tril_indices(num_dets, -1)  # Lower triangle indices excluding the diagonal
 
     # Extract diagonal values
@@ -88,8 +76,5 @@ def _analytical_core(detection_events: np.ndarray, hyperedges: Iterable[HyperEdg
                 pj = correlation_edges[i, j]
                 pi_sum = pi_sum + pj - 2 * pi_sum * pj
         pi_bdy = (xi - pi_sum) / (1 - 2 * pi_sum)
-        # all_edges_of_i = np.delete(correlation_edges[i, :], i)
-        # pi_sum = functools.reduce(lambda p, q: p + q - 2 * p * q, all_edges_of_i)
-        # pi_bdy = (xi - pi_sum) / (1 - 2 * pi_sum)
         correlation_bdy[i] = pi_bdy
     return correlation_bdy, correlation_edges

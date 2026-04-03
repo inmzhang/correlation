@@ -1,5 +1,6 @@
-"""Example for analytical correlation solver for repetition code."""
+"""Example for analytical 2nd-order correlation analysis."""
 import stim
+import numpy as np
 
 import correlation
 
@@ -19,12 +20,13 @@ def main():
     result = correlation.cal_2nd_order_correlations(dets)
     bdy, edges = result.data
     bdy_ideal, edges_ideal = correlation.correlation_from_detector_error_model(dem)
-    print("Boundary correlations:")
-    print(f"Calculated: {bdy}")
-    print(f"Ideal: {bdy_ideal}")
-    print("Edge correlations:")
-    print(f"Calculated: {edges}")
-    print(f"Ideal: {edges_ideal}")
+    bdy_diff = np.abs(bdy - bdy_ideal)
+    edge_diff = np.abs(edges - edges_ideal)
+    print("Analytic 2nd-order result vs DEM")
+    print(f"  boundary max abs diff:  {bdy_diff.max():.6f}")
+    print(f"  boundary mean abs diff: {bdy_diff.mean():.6f}")
+    print(f"  edge max abs diff:      {edge_diff.max():.6f}")
+    print(f"  edge mean abs diff:     {edge_diff.mean():.6f}")
 
     
 if __name__ == '__main__':

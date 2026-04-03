@@ -97,8 +97,9 @@ def _cal_expectations(
         expectations[frozenset({i})] = expect_ixj[i, i].item()
         for j in range(i):
             expectations[frozenset({i, j})] = expect_ixj[i, j].item()
+    _populate_higher_order_expectations(detection_events, clusters, expectations)
     for cluster in clusters:
-        cluster.register_expectation(detection_events, expectations)
+        cluster.register_expectation(expectations)
 
 
 def _adjust_final_probs(
@@ -108,10 +109,14 @@ def _adjust_final_probs(
     """Adjust the final correlation probabilities."""
     # cluster roots need not be adjusted
     corr_probs = {c.root: c.solved_probs[c.root] for c in clusters}
+    superset_index = collections.defaultdict(list)
+    for hyperedge in corr_probs:
+        _index_hyperedge_supersets(superset_index, hyperedge)
     max_weight = clusters[0].weight
     weight_to_adjust = max_weight - 1
     while weight_to_adjust > 0:
-        collected_probs = collections.defaultdict(list)
+        collected_prob_sums = collections.defaultdict(float)
+        collected_prob_counts = collections.defaultdict(int)
         # all clusters with weight greater than weight_to_adjust
         cluster_related = [
             cluster for cluster in clusters if cluster.weight > weight_to_adjust
@@ -122,19 +127,25 @@ def _adjust_final_probs(
         for cluster in cluster_related:
             for hyperedge in cluster.with_weight(weight_to_adjust):
                 prob_this = cluster.solved_probs[hyperedge]
-                supersets = [
-                    h for h in corr_probs if hyperedge == h & cluster.root and h not in cluster
-                ]
-                probs_for_adjust = [corr_probs[h] for h in supersets]
-                p_sum = functools.reduce(lambda p, q: p + q - 2 * p * q, probs_for_adjust, 0.0)
+                p_sum = 0.0
+                for superedge in superset_index.get(hyperedge, ()):
+                    if superedge in cluster:
+                        continue
+                    if hyperedge != superedge & cluster.root:
+                        continue
+                    prob_super = corr_probs[superedge]
+                    p_sum = p_sum + prob_super - 2 * p_sum * prob_super
                 prob_adjusted = (prob_this - p_sum) / (1 - 2*p_sum)
-                collected_probs[hyperedge].append(prob_adjusted)
-        # average the probabilities of the same hyperedge in different clusters
+                collected_prob_sums[hyperedge] += prob_adjusted
+                collected_prob_counts[hyperedge] += 1
+        # average the probabilities of the same hyperedge in different clusters.
         collected_probs_mean = {
-            hyperedge: np.mean(probs, dtype=np.float64)
-            for hyperedge, probs in collected_probs.items()
+            hyperedge: collected_prob_sums[hyperedge] / collected_prob_counts[hyperedge]
+            for hyperedge in collected_prob_sums
         }
         corr_probs.update(collected_probs_mean)
+        for hyperedge in collected_probs_mean:
+            _index_hyperedge_supersets(superset_index, hyperedge)
         weight_to_adjust -= 1
 
     # discard those unconcerned hyperedges
@@ -153,6 +164,15 @@ class HyperedgeCluster:
     prototype: "ClusterPrototype"
     expectations: List[float] = dataclasses.field(default_factory=list)
     solved_probs: Dict[HyperEdge, float] = dataclasses.field(default_factory=dict)
+    member_set: Set[HyperEdge] = dataclasses.field(init=False, repr=False)
+    members_by_weight: Dict[int, List[HyperEdge]] = dataclasses.field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.member_set = set(self.members)
+        members_by_weight = collections.defaultdict(list)
+        for hyperedge in self.members:
+            members_by_weight[len(hyperedge)].append(hyperedge)
+        self.members_by_weight = dict(members_by_weight)
 
     @property
     def weight(self) -> int:
@@ -161,27 +181,17 @@ class HyperedgeCluster:
 
     def register_expectation(
         self,
-        detection_events: np.ndarray,
         expectations: Dict[HyperEdge, float],
     ) -> None:
-        """Calculate the expectation values of each hyperedge from the detection events. """
-        for i, hyperedge in enumerate(self.members):
-            prob = expectations.get(hyperedge)
-            if prob is None:  # pragma: no cover
-                prob = np.mean(
-                    np.prod(
-                        detection_events[:, list(hyperedge)], axis=1, dtype=np.float64
-                    ),
-                )
-                expectations[hyperedge] = prob
-            self.expectations.append(prob)
+        """Register the expectation values for the cluster members."""
+        self.expectations.extend(expectations[hyperedge] for hyperedge in self.members)
 
     def __contains__(self, item: HyperEdge):
-        return item in self.members
+        return item in self.member_set
 
     def with_weight(self, weight: int) -> List[HyperEdge]:
         """Return the hyperedges with the given weight in the cluster."""
-        return [hyperedge for hyperedge in self.members if len(hyperedge) == weight]
+        return self.members_by_weight.get(weight, [])
 
     def solve(self, tol: float):
         """Solve the cluster."""
@@ -323,6 +333,48 @@ def register_cluster(
     return cluster
 
 
+def _populate_higher_order_expectations(
+    detection_events: np.ndarray,
+    clusters: List[HyperedgeCluster],
+    expectations: Dict[HyperEdge, float],
+) -> None:
+    """Batch-compute all missing expectations above 2nd order."""
+    missing_by_weight = collections.defaultdict(list)
+    seen = set(expectations)
+    for cluster in clusters:
+        for weight, members in cluster.members_by_weight.items():
+            if weight <= 2:
+                continue
+            for hyperedge in members:
+                if hyperedge in seen:
+                    continue
+                seen.add(hyperedge)
+                missing_by_weight[weight].append(hyperedge)
+
+    num_shots = detection_events.shape[0]
+    target_chunk_bytes = 32_000_000
+    for weight, hyperedges in missing_by_weight.items():
+        chunk_size = max(1, min(len(hyperedges), target_chunk_bytes // (num_shots * weight)))
+        for start in range(0, len(hyperedges), chunk_size):
+            chunk = hyperedges[start:start + chunk_size]
+            columns = np.array([sorted(hyperedge) for hyperedge in chunk], dtype=np.intp)
+            values = np.all(detection_events[:, columns], axis=2)
+            probs = values.mean(axis=0, dtype=np.float64)
+            for hyperedge, prob in zip(chunk, probs):
+                expectations[hyperedge] = float(prob)
+
+
+def _index_hyperedge_supersets(
+    superset_index: Dict[HyperEdge, List[HyperEdge]],
+    hyperedge: HyperEdge,
+) -> None:
+    """Index a solved hyperedge under each of its non-empty proper subsets."""
+    items = tuple(hyperedge)
+    for size in range(1, len(items)):
+        for subset in itertools.combinations(items, size):
+            superset_index[frozenset(subset)].append(hyperedge)
+
+
 def powerset(iterable: Iterable):
     """powerset([1,2,3]) --> (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)
 
@@ -339,12 +391,3 @@ def symmetric_difference(iterable_set: Iterable[Set[int]]) -> Set[int]:
         return a.symmetric_difference(b)
 
     return functools.reduce(sym_diff, iterable_set)
-
-
-def safe_logistic(x):
-    if x < -100:
-        return 0.0
-    elif x > 100:
-        return 1.0
-    else:
-        return 1 / (1 + np.exp(-x))
