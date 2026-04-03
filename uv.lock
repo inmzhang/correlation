@@ -20,7 +20,7 @@ wheels = [
 
 [[package]]
 name = "correlation-analysis"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "1.21.6", source = { registry = "https://mirrors.bfsu.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.8'" },
